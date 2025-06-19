@@ -320,6 +320,13 @@ void test_ref_widgets2(CURL* handle, const char* credentials) {
             {"label", "Testing dynamic"}
         },
         {
+            {"type", "Media"},
+            {"width", "480"},
+            {"height", "480"},
+            /* Use 800x600 cropped to 480x480 */
+            {"media", "camera://?resolution=800x600&mirror=1&channel=3&crop-pos-x=160&crop-pos-y=60&crop-width=480&crop-height=480"}
+        },
+        {
             {"type", "Reference"},
             {"widgetReference", "acap.dynamiclabel2"}
         }
