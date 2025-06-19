@@ -1,5 +1,5 @@
 PROG1	= vapix_example
-OBJS1	= $(PROG1).c
+OBJS1	= $(PROG1).cpp
 PROGS	= $(PROG1)
 
 PKGS = gio-2.0 libcurl jansson
@@ -26,7 +26,7 @@ CFLAGS += -Wall \
 all:	$(PROGS)
 
 $(PROG1): $(OBJS1)
-	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+	$(CXX) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
 clean:
 	rm -f $(PROGS) *.o *.eap* *_LICENSE.txt package.conf* param.conf tmp*

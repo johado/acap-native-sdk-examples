@@ -2,6 +2,8 @@
 #include <gio/gio.h>
 #include <jansson.h>
 #include <syslog.h>
+#include <nlohmann/json.hpp>
+using namespace std;
 
 __attribute__((noreturn)) __attribute__((format(printf, 1, 2))) static void
 panic(const char* format, ...) {
@@ -114,6 +116,16 @@ vapix_post_json(CURL* handle, const char* credentials, const char* endpoint, con
     return json_response;
 }
 
+static nlohmann::json
+vapix_post_json2(CURL* handle, const char* credentials, const char* endpoint, const nlohmann::json &jsonreq) {
+    std::string request = jsonreq.dump(2);
+    char* text_response = vapix_post(handle, credentials, endpoint, request.c_str());
+    nlohmann::json response = nlohmann::json::parse(text_response);
+    free(text_response);
+    return response;
+}
+
+
 static json_t* get_all_properties(CURL* handle, const char* credentials) {
     const char* endpoint = "basicdeviceinfo.cgi";
     const char* request =
@@ -134,7 +146,7 @@ static const char* read_property(const json_t* all_props, const char* prop_name)
 static void show_widget(CURL* handle,
                         const char* credentials,
                         const char* widgetId,
-                        const char* widget,
+                        const char* widget, /* Must be escaped JSON */
                         long durationMillisec) {
     const char* endpoint = "/vapix/intercom/axdisplay:ShowWidget";
     char* request        = NULL;
@@ -156,6 +168,25 @@ static void show_widget(CURL* handle,
     }
 }
 
+void show_widget2(CURL* handle,
+                  const char* credentials,
+                  const char* widgetId,
+                  const nlohmann::json &widget,
+                  long durationMillisec) {
+    const char* endpoint = "/vapix/intercom/axdisplay:ShowWidget";
+    nlohmann::json request;
+
+    if (widgetId != NULL) {
+        request["widgetId"] = widgetId;
+    } else if (!widget.empty()) {
+        request["widget"] = widget;
+    }
+    request["durationMillisec"] = durationMillisec;
+
+    nlohmann::json response = vapix_post_json2(handle, credentials, endpoint, request);
+}
+
+
 static void set_widget(CURL* handle, const char* credentials, const char* widget) {
     const char* endpoint = "/vapix/intercom/axdisplay:SetWidgets";
     char* request        = NULL;
@@ -169,6 +200,16 @@ static void set_widget(CURL* handle, const char* credentials, const char* widget
         json_decref(response);
         g_free(request);
     }
+}
+
+
+void set_widget2(CURL* handle, const char* credentials, const nlohmann::json &widget) {
+    const char* endpoint = "/vapix/intercom/axdisplay:SetWidgets";
+    nlohmann::json request;
+
+    //request["widgets"] = nlohmann::json::array()
+    request["widgets"][0] = widget;
+    nlohmann::json response = vapix_post_json2(handle, credentials, endpoint, request);
 }
 
 static void test_inline_widgets(CURL* handle, const char* credentials) {
@@ -188,6 +229,28 @@ static void test_inline_widgets(CURL* handle, const char* credentials) {
         g_free(widget);
     }
 }
+
+void test_inline_widgets2(CURL* handle, const char* credentials) {
+    const char* widgetId           = NULL;
+    unsigned long durationMillisec = 3000;
+    nlohmann::json widget;
+    for (int i = 0; i < 10; i++) {
+        nlohmann::json child;
+        char label[64];
+
+        sprintf(label, "Testing %i", i);
+        child["type"] = "Label";
+        child["label"] = label;
+        widget["type"] = "Page";
+        widget["children"] = nlohmann::json::array();
+        widget["children"][0] = child;
+        //std::string widgetstr = widget.dump();
+        //syslog(LOG_INFO, "Widget: %s", widget.dump().c_str());
+        show_widget2(handle, credentials, widgetId, widget, durationMillisec);
+        sleep(5);
+    }
+}
+
 
 static void test_ref_widgets(CURL* handle, const char* credentials) {
     const char* widgetId           = NULL;
@@ -233,19 +296,75 @@ static void test_ref_widgets(CURL* handle, const char* credentials) {
     }
 }
 
+
+void test_ref_widgets2(CURL* handle, const char* credentials) {
+    const char* widgetId           = NULL;
+    unsigned long durationMillisec = 3000;
+    nlohmann::json widget;
+
+    syslog(LOG_INFO, "test_ref_widgets2");
+
+    /* Create a dynamiclabel widget to be referenced */
+    widget["id"] = "acap.dynamiclabel2";
+    widget["type"] = "Label";
+    widget["label"] = "Testing2 0";
+    set_widget2(handle, credentials, widget);
+
+    /* Create the page that uses the dynamiclabel */
+    widget["id"] = "acap.test2";
+    widget["type"] = "Page";
+    widget["name"] = "ACAP testpage2";
+    widget["children"] = nlohmann::json::array( {
+        {
+            {"type", "Label"},
+            {"label", "Testing dynamic"}
+        },
+        {
+            {"type", "Reference"},
+            {"widgetReference", "acap.dynamiclabel2"}
+        }
+    });
+    set_widget2(handle, credentials, widget);
+
+    widget           = nlohmann::json::object();
+    widgetId         = "acap.test2";
+    durationMillisec = 10000;
+    show_widget2(handle, credentials, widgetId, widget, durationMillisec);
+
+    for (int i = 0; i < 10; i++) {
+        /* Update the dynamiclabel */
+        char label[64];
+
+        sprintf(label, "Testing2 %i", i);
+
+        widget["id"] = "acap.dynamiclabel2";
+        widget["type"] = "Label";
+        widget["label"] = label;
+
+        syslog(LOG_INFO, "set_widget %s", widget.dump().c_str());
+        set_widget2(handle, credentials, widget);
+
+        // show_widget(handle, credentials, widgetId, widget, durationMillisec);
+        sleep(1);
+    }
+}
+
+
 static void test_widgets(CURL* handle, const char* credentials) {
     if (0) {
         test_inline_widgets(handle, credentials);
     }
 
     test_ref_widgets(handle, credentials);
+
+    test_ref_widgets2(handle, credentials);
 }
 
 int main(void) {
     openlog(NULL, LOG_PID, LOG_USER);
 
     syslog(LOG_INFO, "Curl version %s", curl_version_info(CURLVERSION_NOW)->version);
-    syslog(LOG_INFO, "Jansson version %s", JANSSON_VERSION);
+    //syslog(LOG_INFO, "Jansson version %s", JANSSON_VERSION);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     CURL* handle      = curl_easy_init();
