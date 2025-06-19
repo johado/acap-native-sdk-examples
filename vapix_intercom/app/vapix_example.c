@@ -68,7 +68,11 @@ static size_t append_to_gstring_callback(char* ptr, size_t size, size_t nmemb, v
 static char*
 vapix_post(CURL* handle, const char* credentials, const char* endpoint, const char* request) {
     GString* response = g_string_new(NULL);
-    char* url         = g_strdup_printf("http://127.0.0.12/axis-cgi/%s", endpoint);
+    const char* path  = "/axis-cgi/";
+    if (endpoint[0] == '/') {
+        path = "";
+    }
+    char* url = g_strdup_printf("http://127.0.0.12%s%s", path, endpoint);
 
     curl_easy_setopt(handle, CURLOPT_URL, url);
     curl_easy_setopt(handle, CURLOPT_USERPWD, credentials);
@@ -127,6 +131,116 @@ static const char* read_property(const json_t* all_props, const char* prop_name)
     return json_string_value(prop_value);
 }
 
+static void show_widget(CURL* handle,
+                        const char* credentials,
+                        const char* widgetId,
+                        const char* widget,
+                        long durationMillisec) {
+    const char* endpoint = "/vapix/intercom/axdisplay:ShowWidget";
+    char* request        = NULL;
+
+    if (widgetId != NULL) {
+        request = g_strdup_printf("{ \"widgetId\": \"%s\", \"durationMillisec\": %lu}",
+                                  widgetId,
+                                  durationMillisec);
+    } else if (widget != NULL) {
+        request = g_strdup_printf("{ \"widget\": %s, \"durationMillisec\": %lu}",
+                                  widget,
+                                  durationMillisec);
+    }
+    if (request) {
+        json_t* response = vapix_post_json(handle, credentials, endpoint, request);
+
+        json_decref(response);
+        g_free(request);
+    }
+}
+
+static void set_widget(CURL* handle, const char* credentials, const char* widget) {
+    const char* endpoint = "/vapix/intercom/axdisplay:SetWidgets";
+    char* request        = NULL;
+
+    if (widget != NULL) {
+        request = g_strdup_printf("{ \"widgets\": [%s]}", widget);
+    }
+    if (request) {
+        json_t* response = vapix_post_json(handle, credentials, endpoint, request);
+
+        json_decref(response);
+        g_free(request);
+    }
+}
+
+static void test_inline_widgets(CURL* handle, const char* credentials) {
+    const char* widgetId           = NULL;
+    char* widget                   = NULL;
+    unsigned long durationMillisec = 3000;
+    for (int i = 0; i < 10; i++) {
+        widget = g_strdup_printf(
+            "{ \"type\": \"Page\", \"children\": [\n"
+            "{\"type\": \"Label\", \"label\": \"Testing %i\"}\n"
+            "]}\n",
+            i);
+
+        syslog(LOG_INFO, "Widget: %s", widget);
+        show_widget(handle, credentials, widgetId, widget, durationMillisec);
+        sleep(5);
+        g_free(widget);
+    }
+}
+
+static void test_ref_widgets(CURL* handle, const char* credentials) {
+    const char* widgetId           = NULL;
+    char* widget                   = NULL;
+    unsigned long durationMillisec = 3000;
+    int i                          = 0;
+
+    syslog(LOG_INFO, "test_ref_widgets");
+
+    /* Create a dynamiclabel widget to be referenced */
+    widget = g_strdup_printf(
+        "{ \"id\": \"acap.dynamiclabel\", \"type\": \"Label\", \"label\": \"Testing %i\"}\n",
+        i);
+    set_widget(handle, credentials, widget);
+    g_free(widget);
+
+    /* Create the page that uses the dynamiclabel */
+    widget = g_strdup_printf(
+        "{ \"id\": \"acap.test1\", \"type\": \"Page\", \"children\": [\n"
+        "{\"type\": \"Label\", \"label\": \"Testing dynamic\"},\n"
+        "{\"type\": \"Reference\", \"widgetReference\": \"acap.dynamiclabel\"}\n"
+        "]}\n");
+    set_widget(handle, credentials, widget);
+    g_free(widget);
+
+    widget           = NULL;
+    widgetId         = "acap.test1";
+    durationMillisec = 10000;
+    show_widget(handle, credentials, widgetId, widget, durationMillisec);
+
+    for (int i = 0; i < 10; i++) {
+        /* Update the dynamiclabel */
+        widget = g_strdup_printf(
+            "{ \"id\": \"acap.dynamiclabel\", \"type\": \"Label\", \"label\": \"Testing %i\"}\n",
+            i);
+        syslog(LOG_INFO, "set_widget %s", widget);
+        set_widget(handle, credentials, widget);
+        g_free(widget);
+        widget = NULL;
+
+        // show_widget(handle, credentials, widgetId, widget, durationMillisec);
+        sleep(1);
+    }
+}
+
+static void test_widgets(CURL* handle, const char* credentials) {
+    if (0) {
+        test_inline_widgets(handle, credentials);
+    }
+
+    test_ref_widgets(handle, credentials);
+}
+
 int main(void) {
     openlog(NULL, LOG_PID, LOG_USER);
 
@@ -134,8 +248,7 @@ int main(void) {
     syslog(LOG_INFO, "Jansson version %s", JANSSON_VERSION);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
-    CURL* handle = curl_easy_init();
-
+    CURL* handle      = curl_easy_init();
     char* credentials = retrieve_vapix_credentials("example-vapix-user");
 
     json_t* all_props = get_all_properties(handle, credentials);
@@ -145,6 +258,10 @@ int main(void) {
     syslog(LOG_INFO, "SocSerialNumber: %s", read_property(all_props, "SocSerialNumber"));
 
     json_decref(all_props);
+    syslog(LOG_INFO, "test_widgets");
+
+    test_widgets(handle, credentials);
+
     free(credentials);
     curl_easy_cleanup(handle);
     curl_global_cleanup();
